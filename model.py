@@ -17,8 +17,6 @@ in_file = "/home/raulslab/work/e_to_r_translation/data/europarl-v7.ro-en.en"
 out_file = "/home/raulslab/work/e_to_r_translation/data/europarl-v7.ro-en.ro"
 
 # %%
-
-
 class Translator(object):
     def __init__(self, config):
         tf.reset_default_graph()
@@ -28,6 +26,7 @@ class Translator(object):
         self.input_encoder, self.input_decoder, self.nr_steps_enc, self.nr_steps_dec = self.r.translator_batch_producer(
             self.ses, "Translator_Eng_Ro")
 
+        self._batch_nr = self.r._batch_nr
         self._batch_size = config.batch_size
         self._vocab_size = config.vocab_size
         self._keep_prob = config.keep_prob
@@ -108,8 +107,14 @@ class Translator(object):
                       for _ in range(self._layer_nr)]
         multi_layer_cell = tf.contrib.rnn.MultiRNNCell(
             layers_dec, state_is_tuple=True)
-
-        outputs, _ = tf.nn.dynamic_rnn(multi_layer_cell, input_decoder, sequence_length=tf.fill([self._batch_size,], self.nr_steps_dec),
+        
+        initial_zero_state = multi_layer_cell.zero_state(
+            self._batch_size, tf.float32)          
+        input_state = input_decoder
+        if not is_training:
+            print("\n Zero_State \n")
+            input_state = initial_zero_state
+        outputs, _ = tf.nn.dynamic_rnn(multi_layer_cell, input_state, sequence_length=tf.fill([self._batch_size, ], self.nr_steps_dec),
                                             initial_state=encoder_state, dtype=tf.float32)
         outputs = tf.reshape(outputs, [-1, self._hidden_size])
         return outputs
@@ -121,40 +126,52 @@ class Translator(object):
 
     def train(self):
         self._is_training = True
+        self._data_slice = 0.95
+        print("=========TRAIN\n\n")
         return {
             "cost": self._cost,
-            "train_op": self._train_op
+            "train_op": self._train_op,
+            "input_enc": self.input_encoder
             #change_input_to_train_input
         }
 
     def valdiate(self):
         self._is_training = False
         return {
-            "cost": self._cost
+            "cost": self._cost,
+            "input_enc": self.input_encoder
             #change_input_to_train_input
         }
 
     def test(self):
         self._is_training = False
+        self._data_slice = 0.05
+        print("=========TEST\n\n")
         return {
-            "cost": self._cost
+            "cost": self._cost,
+            "input_enc": self.input_encoder
             #change_input_to_train_input
         }
 
     def run_model(self, operation, verbose=False):
-        start_time = time.time()
-        costs = 0.0
-        iters = 0
-        for step in range(self._epoch_size):
-            vals = self.ses.run(operation)
-            costs += vals["cost"]
-            iters += self.nr_steps_dec
+        for e in range(int(self._batch_nr * self._data_slice)// self._epoch_size):
+            start_time = time.time()
+            costs = 0.0
+            iters = 0
+            print("=========Epoch : %d" % e)
+            for step in range(self._epoch_size):
+                vals = self.ses.run(operation)
+                costs += vals["cost"]
+                iters += self.nr_steps_dec / 2
+                if step == 0:
+                    print(vals["input_enc"][0])
+                    print("\n\n\n")
 
-            if verbose:
-                print("Nr : %.3f perplexity: %.3f speed: %.0f wps" %
-                    (step * 1.0 / self._epoch_size, np.exp(costs / iters),
-                    (iters + self.nr_steps_enc) * self._batch_size /
-                    (time.time() - start_time)))    
+                if verbose and step % 4 == 0:
+                    print("Nr : %.3f perplexity: %.3f speed: %.0f wps" %
+                        (step * 1.0 / self._epoch_size, np.exp(costs / iters),
+                         iters * self._batch_size /
+                        (time.time() - start_time)))
 
     def initialize_variables(self):
         self.ses.run(tf.global_variables_initializer())
@@ -182,35 +199,13 @@ class NormalConfig(object):
     in_file = in_file
     out_file = out_file
     layer_nr = 4
-    batch_size = 100
+    batch_size = 25
     vocab_size = 100000
     keep_prob = 1.0
     hidden_size = 150
     max_grad_norm = 5
-    epoch_size = 10
+    epoch_size = 40
 
-
-# class ValidationConfig(object):
-#     in_file = in_file
-#     out_file = out_file
-#     layer_nr = 4
-#     batch_size = 100
-#     vocab_size = 100000
-#     keep_prob = 1.0
-#     hidden_size = 150
-#     max_grad_norm = 5
-#     epoch_size = 10
-
-# class TestConfig(object):
-#     in_file = in_file
-#     out_file = out_file
-#     layer_nr = 4
-#     batch_size = 100
-#     vocab_size = 100000
-#     keep_prob = 1.0
-#     hidden_size = 150
-#     max_grad_norm = 5
-#     epoch_size = 10
 
 #%%
 # Testing
@@ -219,6 +214,9 @@ t = Translator(NormalConfig())
 t.model()
 t.initialize_variables()
 t.run_model(t.train(), verbose=True)
+t._is_training = False
+t.model()
+t.run_model(t.test(), verbose=True)
 
 t.tensordboard_write()
 t.close_translator()

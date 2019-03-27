@@ -29,7 +29,7 @@ class Reader(object):
             data = f.readlines()
             data = [line.replace(':'," :").replace('.'," .").replace(','," ,").replace(';'," ;").replace("\n"," <eos>").split(sep=' ') for line in data]
             print("-----------Importing data from file")
-            return data[0:2001]
+            return data[0:20001]
 
     def build_vocab(self, file_name):
         print("-----------Building Vocab")
@@ -112,11 +112,3 @@ class Reader(object):
 #         print(ses.run(x[0]))
 #         r.free_threads()
 
-
-#%%
-
-
-#%%
-
-
-#%%
