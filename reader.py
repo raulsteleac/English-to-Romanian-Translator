@@ -22,14 +22,14 @@ class Reader(object):
 
     def import_data_vocab(self, file_name):
         with tf.gfile.Open(file_name, 'r') as f:
-                return f.read().replace(':'," :").replace('.'," .").replace(','," ,").replace(';'," ;").replace("\n"," <eos>").split(sep=' ')
+                return f.read().replace(':'," :").replace('.'," .").replace(','," ,").replace(';'," ;").replace("\n"," <eos> <sos>").split(sep=' ')
     
     def import_data(self, file_name):
         with tf.gfile.Open(file_name, 'r') as f:
             data = f.readlines()
-            data = [line.replace(':'," :").replace('.'," .").replace(','," ,").replace(';'," ;").replace("\n"," <eos>").split(sep=' ') for line in data]
+            data = [("<sos> " + line).replace(':'," :").replace('.'," .").replace(','," ,").replace(';'," ;").replace("\n"," <eos>").split(sep=' ') for line in data]
             print("-----------Importing data from file")
-            return data[0:20001]
+            return data[0:40001], data[40001:44001]
 
     def build_vocab(self, file_name):
         print("-----------Building Vocab")
@@ -40,18 +40,24 @@ class Reader(object):
         cuv = cuv[0:vocab_size]
         self._word_to_id = dict(zip(cuv, [i for i in range(len(cuv))]))        
 
-    def get_words_to_ids(self, data):
-        return np.array([[self._word_to_id[cuv] for cuv in line if cuv in self._word_to_id] for line in data])
+    def get_words_to_ids(self, data, vocab):
+        return np.array([[vocab[cuv] for cuv in line if cuv in vocab] for line in data])
 
     def translator_raw_data(self, file_name):
         print("-----------Creating Translator like formated data")
         self.build_vocab(file_name)
-        data = self.import_data(file_name)
-        data = self.get_words_to_ids(data)
+        data , test= self.import_data(file_name)
+        data = self.get_words_to_ids(data, self._word_to_id)
+        test = self.get_words_to_ids(test, self._word_to_id)
         data_len = len(data)
+        test_len = len(test)
         self._batch_nr = data_len // self._batch_size
-        print("Batch nr : %d" % self._batch_nr)
+        self.test_batch_nr = test_len // self._batch_size
+        print("Batch nr train : %d " % self._batch_nr)
+        print("Batch nr test  : %d" % self.test_batch_nr)
+
         nr_steps = self.compute_nume_steps_per_batch(data)
+        test_nr_steps = self.compute_nume_steps_per_batch(test)
 
         data = data[0: self._batch_nr *
                   self._batch_size].reshape((self._batch_nr, self._batch_size))
@@ -59,8 +65,13 @@ class Reader(object):
         data = [self.reshape_lines(data[i], nr_steps)
                 for i in range(self._batch_nr)]
 
-        print(data[0][0])
-        return data, nr_steps
+        test = test[0: self.test_batch_nr *
+                    self._batch_size].reshape((self.test_batch_nr, self._batch_size))
+        
+        test = [self.reshape_lines(test[i], test_nr_steps)
+                for i in range(self.test_batch_nr)]
+
+        return data, nr_steps, test, test_nr_steps
 
     def compute_nume_steps_per_batch(self, batch):
         return max([len(line) for line in batch])
@@ -77,11 +88,15 @@ class Reader(object):
         with tf.name_scope(name, "Translator_Data_Producer", [self._batch_size, session]):
             print("-----------Producing inputs")
 
-            d_i, nr_steps_in = self.translator_raw_data(self._in_file)
+            d_i, nr_steps_in, t_i, train_nr_steps_i = self.translator_raw_data(self._in_file)
             d_i = tf.convert_to_tensor(d_i)
+            t_i = tf.convert_to_tensor(t_i)
+            self.train_vocab = self._word_to_id
 
-            d_o, nr_steps_out = self.translator_raw_data(self._out_file)
-            d_o = tf.convert_to_tensor(d_o)                
+            d_o, nr_steps_out, t_o, test_nr_steps_o = self.translator_raw_data(self._out_file)
+            d_o = tf.convert_to_tensor(d_o)        
+            t_o = tf.convert_to_tensor(t_o)
+            self.test_vocab = self._word_to_id
 
             print("-----------Converting raw data")
 
@@ -94,10 +109,12 @@ class Reader(object):
                 queue=queue, enqueue_ops=[enqueue_op] * 2)
             self._threads = qr.create_threads(session, self._coord, start=True)
 
-            x = d_i[i]
-            y = d_o[i]
-
-            return x, y, nr_steps_in, nr_steps_out
+            in_enc = d_i[i]
+            in_dec = d_o[i]
+            test_enc = t_i[i % self.test_batch_nr]
+            test_dec = t_o[i % self.test_batch_nr]
+            
+            return in_enc, in_dec, nr_steps_in, nr_steps_out, test_enc, train_nr_steps_i, test_dec, test_nr_steps_o, self._word_to_id["<sos>"], self._word_to_id["<eos>"]
 
     def free_threads(self):
         self._coord.request_stop()
@@ -107,8 +124,13 @@ class Reader(object):
 #Testing
 # with tf.Session() as ses:
 #         r = Reader(in_file=in_file, out_file=out_file, vocab_size=vocab_size, batch_size=100)
-#         x, y, nr_steps_in, nr_steps_out = r.translator_batch_producer(ses)
+#         x, y, nr_steps_in, nr_steps_out,_,_,_,_ = r.translator_batch_producer(ses)
 #         print(ses.run(x[0]))
 #         print(ses.run(x[0]))
 #         r.free_threads()
 
+
+#%%
+
+
+#%%
